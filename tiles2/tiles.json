@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "attribution": "© Your Org",
   "scheme": "xyz",
-  "tiles": ["https://GMO-CLOUD.github.io/MAP/tiles2/20250410T1800/{z}/{x}/{y}.pbf"],
+  "tiles": ["/MAP/tiles2/20250410T1800/{z}/{x}/{y}.pbf"],
   "minzoom": 0,
   "maxzoom": 14,
   "bounds": [-180, -85, 180, 85],

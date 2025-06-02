@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Vector Tiles Speed Display - Mapbox</title>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { width: 100%; height: 100vh; }
+        .mapboxgl-popup {
+            max-width: 250px;
+            font-family: Arial, sans-serif;
+        }
+        .speed-popup {
+            padding: 10px;
+            background: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .layer-control {
+            position: absolute;
+            top: 10px; 
+            left: 10px;
+            background: white;
+            padding: 8px 12px;
+            z-index: 1000; 
+            border-radius: 4px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            font-family: sans-serif;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap; 
+        }
+        .layer-control label {
+            margin-right: 8px;
+            margin-bottom: 5px; 
+        }
+        .layer-control select,
+        .layer-control input[type="number"] {
+            font-size: 14px;
+            padding: 5px;
+            margin-right: 10px; 
+            margin-bottom: 5px; 
+        }
+        .layer-control input[type="number"] {
+            width: 100px;
+        }
+        #continent-selector-label {
+            margin-left: 15px;
+        }
+
+        .load-warning {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background-color: #fff3cd; 
+            color: #856404;      
+            padding: 15px;
+            text-align: center;
+            z-index: 2000; 
+            border-bottom: 1px solid #ffeeba;
+            display: none; 
+            font-family: sans-serif;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        #warning-text {
+            margin-right: 40px; 
+        }
+        .close-warning-btn {
+            position: absolute;
+            top: 50%;
+            right: 15px;
+            transform: translateY(-50%);
+            font-size: 24px;
+            font-weight: bold;
+            color: #7a7051; 
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+        .close-warning-btn:hover {
+            color: #000;
+        }
+
+        .map-legend {
+            position: absolute;
+            bottom: 20px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 10px 15px;
+            border-radius: 5px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+            z-index: 1000; 
+            font-family: sans-serif;
+            font-size: 12px;
+            max-height: 250px; 
+            overflow-y: auto;  
+        }
+        .map-legend h4 {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 14px;
+            text-align: center;
+        }
+        .map-legend div {
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+        }
+        .legend-key {
+            display: inline-block;
+            width: 20px;
+            height: 15px;
+            margin-right: 8px;
+            border: 1px solid #ccc; 
+        }
+    </style>
+</head>
+<body>
+
+<div id="initial-load-warning" class="load-warning">
+    <span id="warning-text"></span>
+    <button id="close-warning-btn" class="close-warning-btn" title="Tutup Peringatan">&times;</button>
+</div>
+
+<div class="layer-control">
+    <label for="layer-selector">Select Layer:</label>
+    <select id="layer-selector"></select>
+    
+    <label for="speed-filter-min-input" style="margin-left: 15px;">Min Speed (knots):</label>
+    <input type="number" id="speed-filter-min-input" min="0" placeholder="e.g., 5">
+    
+    <label for="speed-filter-max-input" style="margin-left: 10px;">Max Speed (knots):</label>
+    <input type="number" id="speed-filter-max-input" min="0" placeholder="e.g., 10">
+
+    <label id="continent-selector-label" for="continent-selector">Go to Continent:</label>
+    <select id="continent-selector"></select>
+</div>
+
+<div id="map"></div>
+
+<div id="speed-legend" class="map-legend">
+    <h4>Speed Legend (knots)</h4> 
+</div>
+
+
+<script>
+mapboxgl.accessToken = 'pk.eyJ1Ijoic2FzdHJhYW50YXJhMTkiLCJhIjoiY21iMDYzdGU5MG15ZDJqc2NvNzlobWIwMCJ9.fTJ8PkMKJll4es-lDHtURg';
+
+const continents = [
+    { name: "Pilih Benua...", value: "", placeholder: true },
+    { name: "Asia", coordinates: [90.0, 30.0], zoom: 2.8 },
+    { name: "Eropa", coordinates: [15.0, 50.0], zoom: 3.5 },
+    { name: "Afrika", coordinates: [20.0, 0.0], zoom: 2.8 },
+    { name: "Amerika Utara", coordinates: [-100.0, 40.0], zoom: 2.8 },
+    { name: "Amerika Selatan", coordinates: [-60.0, -15.0], zoom: 2.8 },
+    { name: "Australia/Oseania", coordinates: [135.0, -25.0], zoom: 3.2 },
+    { name: "Antarktika", coordinates: [0.0, -75.0], zoom: 2 }
+];
+
+const BLUE_RGB = [0, 0, 255];
+const GREEN_RGB = [0, 255, 0];
+const MAX_SPEED_FOR_GRADIENT = 20; 
+const SPEED_STEP = 0.5;            
+
+function generateColorStops(maxSpeed, stepSize, startColorRgb, endColorRgb) {
+    const stops = [];
+    if (maxSpeed < 0) maxSpeed = 0;
+
+    if (maxSpeed === 0) {
+        const r = Math.round(startColorRgb[0]);
+        const g = Math.round(startColorRgb[1]);
+        const b = Math.round(startColorRgb[2]);
+        stops.push(0, `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`);
+        return stops;
+    }
+
+    const numIterPoints = Math.floor(maxSpeed / stepSize);
+
+    for (let i = 0; i <= numIterPoints; i++) {
+        const currentSpeed = i * stepSize;
+        const t = Math.min(1, currentSpeed / maxSpeed); 
+
+        const r = Math.round(startColorRgb[0] * (1 - t) + endColorRgb[0] * t);
+        const g = Math.round(startColorRgb[1] * (1 - t) + endColorRgb[1] * t);
+        const b = Math.round(startColorRgb[2] * (1 - t) + endColorRgb[2] * t);
+
+        stops.push(currentSpeed, `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`);
+    }
+
+    const lastGeneratedSpeed = stops[stops.length - 2];
+    if (lastGeneratedSpeed < maxSpeed) {
+        const r_end = Math.round(endColorRgb[0]);
+        const g_end = Math.round(endColorRgb[1]);
+        const b_end = Math.round(endColorRgb[2]);
+        stops.push(maxSpeed, `#${r_end.toString(16).padStart(2, '0')}${g_end.toString(16).padStart(2, '0')}${b_end.toString(16).padStart(2, '0')}`);
+    } else if (lastGeneratedSpeed === maxSpeed) {
+        const r_end = Math.round(endColorRgb[0]);
+        const g_end = Math.round(endColorRgb[1]);
+        const b_end = Math.round(endColorRgb[2]);
+        stops[stops.length-1] = `#${r_end.toString(16).padStart(2, '0')}${g_end.toString(16).padStart(2, '0')}${b_end.toString(16).padStart(2, '0')}`;
+    }
+    return stops;
+}
+
+const colorInterpolationStops = generateColorStops(MAX_SPEED_FOR_GRADIENT, SPEED_STEP, BLUE_RGB, GREEN_RGB);
+console.log("Generated Color Stops (for stepped colors):", JSON.stringify(colorInterpolationStops));
+
+const stepExpressionParams = [];
+let defaultColorForStep = '#cccccc'; 
+
+if (colorInterpolationStops.length >= 2) {
+    defaultColorForStep = colorInterpolationStops[1]; 
+    for (let i = 2; i < colorInterpolationStops.length; i += 2) {
+        stepExpressionParams.push(colorInterpolationStops[i]);   
+        stepExpressionParams.push(colorInterpolationStops[i+1]); 
+    }
+}
+
+const allLayersConfig = [
+    {
+        id: 'layer_20250410_1800',
+        name: 'Data 10/04 18:00',
+        sourceId: 'source_tiles2',
+        sourceUrl: 'tiles2/tiles.json',
+        sourceLayer: '20250410T1800'
+    },
+    {
+        id: 'layer_20250410_2100',
+        name: 'Data 10/04 21:00',
+        sourceId: 'source_tiles5',
+        sourceUrl: 'tiles5/tiles.json',
+        sourceLayer: '20250410T2100'
+    },
+];
+
+const map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/outdoors-v12',
+    center: [106.8, -6.1],
+    zoom: 5,
+    maxZoom: 18,
+    minZoom: 2 
+});
+
+let currentActiveLayerId = null;
+let currentMinSpeedThreshold = null;
+let currentMaxSpeedThreshold = null;
+
+function applySpeedFilterToCurrentLayer() {
+    if (!currentActiveLayerId || !map.getLayer(currentActiveLayerId)) {
+        return;
+    }
+    const conditions = ['all'];
+    let minValParsed = null;
+    if (currentMinSpeedThreshold !== null && currentMinSpeedThreshold !== '') {
+        minValParsed = parseFloat(currentMinSpeedThreshold);
+        if (!isNaN(minValParsed) && minValParsed >= 0) {
+            conditions.push(['>=', ['get', 'speed'], minValParsed]);
+        } else {
+            minValParsed = null;
+        }
+    }
+    let maxValParsed = null;
+    if (currentMaxSpeedThreshold !== null && currentMaxSpeedThreshold !== '') {
+        maxValParsed = parseFloat(currentMaxSpeedThreshold);
+        if (!isNaN(maxValParsed) && maxValParsed >= 0) {
+            conditions.push(['<', ['get', 'speed'], maxValParsed]);
+        } else {
+            maxValParsed = null;
+        }
+    }
+    if (minValParsed !== null && maxValParsed !== null && minValParsed >= maxValParsed) {
+        console.warn("Minimum speed threshold is greater than or equal to maximum speed threshold.");
+    }
+    if (conditions.length > 1) {
+        map.setFilter(currentActiveLayerId, conditions);
+    } else {
+        map.setFilter(currentActiveLayerId, null);
+    }
+}
+
+function populateSpeedLegend() {
+    const legendContainer = document.getElementById('speed-legend');
+    
+    let legendTitleElement = legendContainer.querySelector('h4');
+    if (!legendTitleElement) {
+        legendTitleElement = document.createElement('h4');
+        if (legendContainer.firstChild) {
+            legendContainer.insertBefore(legendTitleElement, legendContainer.firstChild);
+        } else {
+            legendContainer.appendChild(legendTitleElement);
+        }
+    }
+    legendTitleElement.textContent = 'Speed Legend (knots)';
+
+    Array.from(legendContainer.children).forEach(child => {
+        if (child.tagName.toLowerCase() !== 'h4') {
+            legendContainer.removeChild(child);
+        }
+    });
+
+    if (colorInterpolationStops.length >= 2) {
+        for (let i = 0; i < colorInterpolationStops.length; i += 2) {
+            const currentSpeed = colorInterpolationStops[i];
+            const currentColor = colorInterpolationStops[i+1];
+            let legendItemText = '';
+
+            if (i + 2 < colorInterpolationStops.length) {
+                const nextSpeed = colorInterpolationStops[i+2];
+                legendItemText = `${currentSpeed.toFixed(1)} - <${nextSpeed.toFixed(1)} knots`;
+            } else {
+                legendItemText = `&ge; ${currentSpeed.toFixed(1)} knots`;
+            }
+
+            const legendItem = document.createElement('div');
+            legendItem.innerHTML = `<span class="legend-key" style="background-color: ${currentColor};"></span> ${legendItemText}`;
+            legendContainer.appendChild(legendItem);
+        }
+    }
+}
+
+
+map.on('load', () => {
+    const warningBox = document.getElementById('initial-load-warning');
+    const warningTextElement = document.getElementById('warning-text');
+    const closeWarningBtn = document.getElementById('close-warning-btn');
+    const warningDismissedKey = 'mapDataWarningDismissed_v1'; 
+    const layerControlDiv = document.querySelector('.layer-control');
+
+    if (warningBox && warningTextElement && closeWarningBtn) {
+        if (!localStorage.getItem(warningDismissedKey)) { 
+            warningTextElement.textContent = "Tips: Jika data tidak muncul, coba pilih layer dari dropdown atau lakukan zoom in/out pada peta.";
+            warningBox.style.display = 'block'; 
+            if(layerControlDiv) layerControlDiv.style.top = `${warningBox.offsetHeight + 10}px`;
+
+            closeWarningBtn.addEventListener('click', () => {
+                warningBox.style.display = 'none'; 
+                if(layerControlDiv) layerControlDiv.style.top = '10px'; 
+                localStorage.setItem(warningDismissedKey, 'true'); 
+            });
+        } else {
+             if(layerControlDiv) layerControlDiv.style.top = '10px'; 
+        }
+    }
+
+    const continentSelector = document.getElementById('continent-selector');
+    continents.forEach(continent => {
+        const option = document.createElement('option');
+        option.value = continent.placeholder ? "" : JSON.stringify({ 
+            coordinates: continent.coordinates, 
+            zoom: continent.zoom 
+        });
+        option.textContent = continent.name;
+        if (continent.placeholder) {
+            option.disabled = true;
+            option.selected = true;
+        }
+        continentSelector.appendChild(option);
+    });
+
+    continentSelector.addEventListener('change', (event) => {
+        if (event.target.value) { 
+            try {
+                const selectedLocation = JSON.parse(event.target.value);
+                map.flyTo({
+                    center: selectedLocation.coordinates,
+                    zoom: selectedLocation.zoom,
+                    speed: 1.2,     
+                    curve: 1,       
+                    essential: true 
+                });
+            } catch (e) {
+                console.error("Error parsing continent data from selector:", e);
+            }
+        }
+    });
+
+    const iconName = 'custom-arrow-icon';
+    const iconUrl = 'assets/arrow.svg';
+    const img = new Image();
+    img.onload = () => {
+        if (map.hasImage(iconName)) {
+            proceedWithLayers();
+        } else {
+            try {
+                map.addImage(iconName, img, { sdf: true });
+                proceedWithLayers();
+            } catch (err) {
+                console.error(`Gagal menambahkan ikon '${iconName}':`, err);
+                alert(`Gagal menambahkan ikon '${iconName}'. Cek console.`);
+            }
+        }
+    };
+    img.onerror = (e) => {
+        console.error(`Gagal memuat ikon dari ${iconUrl}:`, e);
+        alert(`Gagal memuat file SVG dari ${iconUrl}.`);
+    };
+    img.src = iconUrl;
+
+    function proceedWithLayers() {
+        populateSpeedLegend(); 
+
+        const layerSelector = document.getElementById('layer-selector');
+        const speedFilterMinInput = document.getElementById('speed-filter-min-input');
+        const speedFilterMaxInput = document.getElementById('speed-filter-max-input');
+        const addedSourceIds = new Set();
+        const managedLayerIds = [];
+
+        const noneOption = document.createElement('option');
+        noneOption.value = 'none';
+        noneOption.textContent = '--- Select a Layer ---';
+        layerSelector.appendChild(noneOption);
+
+        allLayersConfig.forEach(config => {
+            if (!config.id || !config.name || !config.sourceId || !config.sourceUrl || !config.sourceLayer) {
+                console.error('Invalid layer configuration, skipping:', config);
+                return;
+            }
+
+            if (!addedSourceIds.has(config.sourceId)) {
+                if (map.getSource(config.sourceId)) {
+                    addedSourceIds.add(config.sourceId);
+                } else {
+                    try {
+                        map.addSource(config.sourceId, { type: 'vector', url: config.sourceUrl });
+                        addedSourceIds.add(config.sourceId);
+                    } catch (err) {
+                        console.error(`Gagal menambahkan source '${config.sourceId}':`, err);
+                        return;
+                    }
+                }
+            }
+
+            if (map.getLayer(config.id)) {
+            } else {
+                try {
+                    map.addLayer({
+                        id: config.id,
+                        source: config.sourceId,
+                        'source-layer': config.sourceLayer,
+                        type: 'symbol',
+                        layout: {
+                            'icon-image': iconName,
+                            'icon-size': 0.4, // PERUBAHAN: Ukuran ikon tetap lebih kecil
+                            'icon-rotate': ['get', 'direction'],
+                            'icon-allow-overlap': false,  // PERUBAHAN: Tidak mengizinkan overlap
+                            'icon-ignore-placement': false, // PERUBAHAN: Memperhatikan penempatan, menghindari tabrakan
+                            'visibility': 'none'
+                        },
+                        paint: {
+                            'icon-color': [
+                                'case',
+                                ['has', 'speed'],
+                                [
+                                    'step',
+                                    ['get', 'speed'],
+                                    defaultColorForStep, 
+                                    ...stepExpressionParams 
+                                ],
+                                '#cccccc' 
+                            ],
+                            'icon-opacity': 0.9 // Anda bisa juga mengurangi opacity jika masih terlalu padat
+                        }
+                    });
+                } catch (err) {
+                    console.error(`Gagal menambahkan layer '${config.id}':`, err);
+                    return;
+                }
+            }
+            managedLayerIds.push(config.id);
+
+            map.on('click', config.id, (e) => {
+                const features = e.features;
+                if (!features || features.length === 0) return;
+                const properties = features[0].properties;
+                console.log('Clicked feature speed:', properties.speed, typeof properties.speed);
+                const speed = properties.speed !== undefined ? `${properties.speed} knots` : 'No data';
+                const coordinates = e.lngLat;
+                new mapboxgl.Popup()
+                    .setLngLat(coordinates)
+                    .setHTML(
+                        `<div class="speed-popup">
+                            <h3>Speed Information</h3>
+                            <p><strong>Layer:</strong> ${config.name}</p>
+                            <p><strong>Speed:</strong> ${speed}</p>
+                            ${properties.timestamp ? `<p><strong>Time:</strong> ${new Date(properties.timestamp).toLocaleString()}</p>` : ''}
+                            ${properties.direction ? `<p><strong>Direction:</strong> ${properties.direction}°</p>` : ''}
+                        </div>`
+                    )
+                    .addTo(map);
+            });
+            map.on('mouseenter', config.id, () => map.getCanvas().style.cursor = 'pointer');
+            map.on('mouseleave', config.id, () => map.getCanvas().style.cursor = '');
+
+            const option = document.createElement('option');
+            option.value = config.id;
+            option.textContent = config.name;
+            layerSelector.appendChild(option);
+        });
+        
+        layerSelector.addEventListener('change', (event) => {
+            const selectedLayerId = event.target.value;
+            if (currentActiveLayerId && map.getLayer(currentActiveLayerId)) {
+                 map.setLayoutProperty(currentActiveLayerId, 'visibility', 'none');
+            }
+            currentActiveLayerId = null;
+            if (selectedLayerId !== 'none' && map.getLayer(selectedLayerId)) {
+                map.setLayoutProperty(selectedLayerId, 'visibility', 'visible');
+                currentActiveLayerId = selectedLayerId;
+                applySpeedFilterToCurrentLayer();
+            }
+        });
+
+        speedFilterMinInput.addEventListener('input', (event) => {
+            const value = event.target.value;
+            if (value === '') {
+                currentMinSpeedThreshold = null;
+            } else {
+                const numericValue = parseFloat(value);
+                currentMinSpeedThreshold = (!isNaN(numericValue) && numericValue >= 0) ? numericValue : null;
+            }
+            applySpeedFilterToCurrentLayer();
+        });
+
+        speedFilterMaxInput.addEventListener('input', (event) => {
+            const value = event.target.value;
+            if (value === '') {
+                currentMaxSpeedThreshold = null;
+            } else {
+                const numericValue = parseFloat(value);
+                currentMaxSpeedThreshold = (!isNaN(numericValue) && numericValue >= 0) ? numericValue : null;
+            }
+            applySpeedFilterToCurrentLayer();
+        });
+
+    } 
+});
+
+map.on('error', (e) => {
+    console.error('Map error:', e.error ? e.error.message : e);
+    if (e.error && e.error.message.toLowerCase().includes('failed to load tile')) {
+        console.warn('Tile gagal dimuat. Periksa URL dan server tile.');
+    }
+});
+</script>
+</body>
+</html>
